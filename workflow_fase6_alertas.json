@@ -1,0 +1,587 @@
+{
+  "updatedAt": "2026-07-01T08:32:20.047Z",
+  "createdAt": "2026-06-29T09:39:07.661Z",
+  "id": "M2I1eekcsJTi9Av7",
+  "name": "21 — Faturas Fornecedores — Fase 6 Alertas POs",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "f6-001",
+      "name": "Diário 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f6-002",
+      "name": "Obter Token BC",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://login.microsoftonline.com/f41c8222-df66-449c-93b5-c1879e641cb2/oauth2/v2.0/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "client_credentials"
+            },
+            {
+              "name": "client_id",
+              "value": "fabec729-bb7e-48f8-a3cc-4a649ed4ab45"
+            },
+            {
+              "name": "client_secret",
+              "value": "<REDACTED_BC_PROD_CLIENT_SECRET>"
+            },
+            {
+              "name": "scope",
+              "value": "https://api.businesscentral.dynamics.com/.default"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f6-003",
+      "name": "Preparar Filtro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Data limite: ha 3 dias atras\nconst hoje = new Date();\nconst dataLimite = new Date(hoje.getTime() - 3 * 24 * 60 * 60 * 1000);\nconst dataLimiteStr = dataLimite.toISOString().substring(0, 10);\n\nreturn [{\n  json: {\n    data_limite: dataLimiteStr,\n    data_hoje: hoje.toISOString().substring(0, 10),\n    filtro_odata: `documentType eq 'Order' and orderDate le ${dataLimiteStr}`\n  }\n}];"
+      }
+    },
+    {
+      "id": "f6-004",
+      "name": "Buscar POs Antigas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.businesscentral.dynamics.com/v2.0/f41c8222-df66-449c-93b5-c1879e641cb2/PROD/ODataV4/Company('Jorge%20Brand%C3%A3o%20Gon%C3%A7alves')/workflowPurchaseDocuments?$filter={{ encodeURIComponent($json.filtro_odata) }}&$select=number,documentType,buyFromVendorNumber,payToName,orderDate,expectedReceiptDate,postingDate&$top=200",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Obter Token BC').first().json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "f6-005",
+      "name": "Preparar Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Constroi tabela HTML com as POs atrasadas\nconst bcResp = $input.first().json;\nconst filtro = $('Preparar Filtro').item.json;\nconst pos = bcResp?.value || [];\n\nif (pos.length === 0) {\n  return [{ json: { enviar: false, count: 0, motivo: 'Nenhuma PO atrasada hoje' } }];\n}\n\n// Ordenar por data (mais antigas primeiro)\npos.sort((a, b) => new Date(a.orderDate) - new Date(b.orderDate));\n\n// Calcular dias em atraso para cada PO\nconst hoje = new Date();\nconst linhas = pos.map(p => {\n  const orderDate = new Date(p.orderDate);\n  const diasAtraso = Math.floor((hoje - orderDate) / (1000 * 60 * 60 * 24));\n  const expected = (p.expectedReceiptDate && !p.expectedReceiptDate.startsWith('0001')) ? p.expectedReceiptDate : '—';\n  return `<tr style=\"border-bottom:1px solid #ddd;\">\n    <td style=\"padding:6px;\">${p.number}</td>\n    <td style=\"padding:6px;\">${p.payToName || p.buyFromVendorNumber}</td>\n    <td style=\"padding:6px;\">${p.orderDate}</td>\n    <td style=\"padding:6px;\">${expected}</td>\n    <td style=\"padding:6px;color:${diasAtraso > 7 ? 'red' : 'orange'};font-weight:bold;\">${diasAtraso} dias</td>\n  </tr>`;\n}).join('');\n\nconst html = `<h2>📦 Encomendas em atraso (≥ 3 dias)</h2>\n<p>Data: ${filtro.data_hoje} · ${pos.length} encomenda(s) ainda sem receção/fatura</p>\n<table style=\"border-collapse:collapse;font-family:Arial;width:100%;\">\n  <thead style=\"background:#333;color:#fff;\">\n    <tr>\n      <th style=\"padding:8px;text-align:left;\">Nº PO</th>\n      <th style=\"padding:8px;text-align:left;\">Fornecedor</th>\n      <th style=\"padding:8px;text-align:left;\">Data Encomenda</th>\n      <th style=\"padding:8px;text-align:left;\">Receção Esperada</th>\n      <th style=\"padding:8px;text-align:left;\">Dias em atraso</th>\n    </tr>\n  </thead>\n  <tbody>${linhas}</tbody>\n</table>\n<p style=\"font-size:12px;color:#666;margin-top:20px;\">Email automático gerado pelo sistema de Automação de Faturas Fornecedores.</p>`;\n\nreturn [{\n  json: {\n    enviar: true,\n    count: pos.length,\n    html,\n    pos\n  }\n}];"
+      }
+    },
+    {
+      "id": "f6-006",
+      "name": "Tem POs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-tem-pos",
+              "leftValue": "={{ $json.enviar }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f6-007",
+      "name": "Email Alerta",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1560,
+        200
+      ],
+      "parameters": {
+        "sendTo": "wp@cabeceiras.pt,brandao@cabeceiras.pt",
+        "subject": "=📦 {{ $json.count }} encomenda(s) em atraso — Cabeceiras",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ANhwrJfsekq0u1K3",
+          "name": "Gmail ACS"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "id": "f6-008",
+      "name": "Sem POs Atrasadas",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        400
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Diário 8h": {
+      "main": [
+        [
+          {
+            "node": "Obter Token BC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter Token BC": {
+      "main": [
+        [
+          {
+            "node": "Preparar Filtro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Filtro": {
+      "main": [
+        [
+          {
+            "node": "Buscar POs Antigas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar POs Antigas": {
+      "main": [
+        [
+          {
+            "node": "Preparar Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Email": {
+      "main": [
+        [
+          {
+            "node": "Tem POs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem POs?": {
+      "main": [
+        [
+          {
+            "node": "Email Alerta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sem POs Atrasadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "node:Diário 8h": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "079611bb-82ec-439e-a588-478d9b1353b5",
+  "activeVersionId": "079611bb-82ec-439e-a588-478d9b1353b5",
+  "versionCounter": 7,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-06-29T09:39:07.661Z",
+      "createdAt": "2026-06-29T09:39:07.661Z",
+      "role": "workflow:owner",
+      "workflowId": "M2I1eekcsJTi9Av7",
+      "projectId": "fTTAw49qSOrNXkUO",
+      "project": {
+        "updatedAt": "2025-10-21T10:00:02.476Z",
+        "createdAt": "2025-10-21T09:58:35.551Z",
+        "id": "fTTAw49qSOrNXkUO",
+        "name": "Andre Silva <andre.silva@wisepirates.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "666bfb43-6f8a-428a-813c-a5e928fabdca"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-01T08:32:20.049Z",
+    "createdAt": "2026-07-01T08:32:20.049Z",
+    "versionId": "079611bb-82ec-439e-a588-478d9b1353b5",
+    "workflowId": "M2I1eekcsJTi9Av7",
+    "nodes": [
+      {
+        "id": "f6-001",
+        "name": "Diário 8h",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          240,
+          300
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 8 * * 1-5"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "f6-002",
+        "name": "Obter Token BC",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          460,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://login.microsoftonline.com/f41c8222-df66-449c-93b5-c1879e641cb2/oauth2/v2.0/token",
+          "sendBody": true,
+          "contentType": "form-urlencoded",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "grant_type",
+                "value": "client_credentials"
+              },
+              {
+                "name": "client_id",
+                "value": "fabec729-bb7e-48f8-a3cc-4a649ed4ab45"
+              },
+              {
+                "name": "client_secret",
+                "value": "<REDACTED_BC_PROD_CLIENT_SECRET>"
+              },
+              {
+                "name": "scope",
+                "value": "https://api.businesscentral.dynamics.com/.default"
+              }
+            ]
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "f6-003",
+        "name": "Preparar Filtro",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          680,
+          300
+        ],
+        "parameters": {
+          "jsCode": "// Data limite: ha 3 dias atras\nconst hoje = new Date();\nconst dataLimite = new Date(hoje.getTime() - 3 * 24 * 60 * 60 * 1000);\nconst dataLimiteStr = dataLimite.toISOString().substring(0, 10);\n\nreturn [{\n  json: {\n    data_limite: dataLimiteStr,\n    data_hoje: hoje.toISOString().substring(0, 10),\n    filtro_odata: `documentType eq 'Order' and orderDate le ${dataLimiteStr}`\n  }\n}];"
+        }
+      },
+      {
+        "id": "f6-004",
+        "name": "Buscar POs Antigas",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          900,
+          300
+        ],
+        "parameters": {
+          "method": "GET",
+          "url": "=https://api.businesscentral.dynamics.com/v2.0/f41c8222-df66-449c-93b5-c1879e641cb2/PROD/ODataV4/Company('Jorge%20Brand%C3%A3o%20Gon%C3%A7alves')/workflowPurchaseDocuments?$filter={{ encodeURIComponent($json.filtro_odata) }}&$select=number,documentType,buyFromVendorNumber,payToName,orderDate,expectedReceiptDate,postingDate&$top=200",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Obter Token BC').first().json.access_token }}"
+              }
+            ]
+          },
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "f6-005",
+        "name": "Preparar Email",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1120,
+          300
+        ],
+        "parameters": {
+          "jsCode": "// Constroi tabela HTML com as POs atrasadas\nconst bcResp = $input.first().json;\nconst filtro = $('Preparar Filtro').item.json;\nconst pos = bcResp?.value || [];\n\nif (pos.length === 0) {\n  return [{ json: { enviar: false, count: 0, motivo: 'Nenhuma PO atrasada hoje' } }];\n}\n\n// Ordenar por data (mais antigas primeiro)\npos.sort((a, b) => new Date(a.orderDate) - new Date(b.orderDate));\n\n// Calcular dias em atraso para cada PO\nconst hoje = new Date();\nconst linhas = pos.map(p => {\n  const orderDate = new Date(p.orderDate);\n  const diasAtraso = Math.floor((hoje - orderDate) / (1000 * 60 * 60 * 24));\n  const expected = (p.expectedReceiptDate && !p.expectedReceiptDate.startsWith('0001')) ? p.expectedReceiptDate : '—';\n  return `<tr style=\"border-bottom:1px solid #ddd;\">\n    <td style=\"padding:6px;\">${p.number}</td>\n    <td style=\"padding:6px;\">${p.payToName || p.buyFromVendorNumber}</td>\n    <td style=\"padding:6px;\">${p.orderDate}</td>\n    <td style=\"padding:6px;\">${expected}</td>\n    <td style=\"padding:6px;color:${diasAtraso > 7 ? 'red' : 'orange'};font-weight:bold;\">${diasAtraso} dias</td>\n  </tr>`;\n}).join('');\n\nconst html = `<h2>📦 Encomendas em atraso (≥ 3 dias)</h2>\n<p>Data: ${filtro.data_hoje} · ${pos.length} encomenda(s) ainda sem receção/fatura</p>\n<table style=\"border-collapse:collapse;font-family:Arial;width:100%;\">\n  <thead style=\"background:#333;color:#fff;\">\n    <tr>\n      <th style=\"padding:8px;text-align:left;\">Nº PO</th>\n      <th style=\"padding:8px;text-align:left;\">Fornecedor</th>\n      <th style=\"padding:8px;text-align:left;\">Data Encomenda</th>\n      <th style=\"padding:8px;text-align:left;\">Receção Esperada</th>\n      <th style=\"padding:8px;text-align:left;\">Dias em atraso</th>\n    </tr>\n  </thead>\n  <tbody>${linhas}</tbody>\n</table>\n<p style=\"font-size:12px;color:#666;margin-top:20px;\">Email automático gerado pelo sistema de Automação de Faturas Fornecedores.</p>`;\n\nreturn [{\n  json: {\n    enviar: true,\n    count: pos.length,\n    html,\n    pos\n  }\n}];"
+        }
+      },
+      {
+        "id": "f6-006",
+        "name": "Tem POs?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1340,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "cond-tem-pos",
+                "leftValue": "={{ $json.enviar }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "f6-007",
+        "name": "Email Alerta",
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.1,
+        "position": [
+          1560,
+          200
+        ],
+        "parameters": {
+          "sendTo": "wp@cabeceiras.pt,brandao@cabeceiras.pt",
+          "subject": "=📦 {{ $json.count }} encomenda(s) em atraso — Cabeceiras",
+          "emailType": "html",
+          "message": "={{ $json.html }}",
+          "options": {}
+        },
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "ANhwrJfsekq0u1K3",
+            "name": "Gmail ACS"
+          }
+        },
+        "disabled": true
+      },
+      {
+        "id": "f6-008",
+        "name": "Sem POs Atrasadas",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          1560,
+          400
+        ],
+        "parameters": {}
+      }
+    ],
+    "connections": {
+      "Diário 8h": {
+        "main": [
+          [
+            {
+              "node": "Obter Token BC",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Obter Token BC": {
+        "main": [
+          [
+            {
+              "node": "Preparar Filtro",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Filtro": {
+        "main": [
+          [
+            {
+              "node": "Buscar POs Antigas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Buscar POs Antigas": {
+        "main": [
+          [
+            {
+              "node": "Preparar Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Email": {
+        "main": [
+          [
+            {
+              "node": "Tem POs?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Tem POs?": {
+        "main": [
+          [
+            {
+              "node": "Email Alerta",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Sem POs Atrasadas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Andre Silva",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-01T08:32:20.095Z",
+        "id": 1241,
+        "workflowId": "M2I1eekcsJTi9Av7",
+        "versionId": "079611bb-82ec-439e-a588-478d9b1353b5",
+        "event": "deactivated",
+        "userId": "666bfb43-6f8a-428a-813c-a5e928fabdca"
+      },
+      {
+        "createdAt": "2026-07-01T08:32:20.115Z",
+        "id": 1242,
+        "workflowId": "M2I1eekcsJTi9Av7",
+        "versionId": "079611bb-82ec-439e-a588-478d9b1353b5",
+        "event": "activated",
+        "userId": "666bfb43-6f8a-428a-813c-a5e928fabdca"
+      }
+    ]
+  }
+}
