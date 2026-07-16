@@ -50,7 +50,18 @@ n8n workflow
 
 ## Segurança
 
-O repositório **NÃO** contém:
+**Secrets estão em variáveis de ambiente do Railway**, nunca no repositório.
+
+Os HTTP request nodes que precisam de client secrets Azure referenciam-nos via expressões n8n:
+- `{{ $env.GRAPH_CLIENT_SECRET }}` — Microsoft Graph API (OneDrive + Excel)
+- `{{ $env.BC_PROD_CLIENT_SECRET }}` — Business Central PROD OData
+- `{{ $env.BC_DEV_CLIENT_SECRET }}` — Business Central DEV OData
+
+Para importar este workflow noutro ambiente:
+1. Criar as 3 env vars no host (Railway/Docker) com os valores reais dos client secrets Azure
+2. Import do JSON → n8n interpola `{{ $env.X }}` em runtime
+
+O repositório também **NÃO** contém:
 - Credenciais Google Service Account (`cabeceiras-ocr-*.json`)
 - Ficheiros Excel com dados do cliente
 - Faturas reais (PDF/imagens)
