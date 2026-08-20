@@ -17,9 +17,9 @@ Sessão dedicada a colocar o projeto sob controlo de versões e resolver secrets
 - 21 ficheiros commitados: README, workflows, docs, relatórios, `.gitignore`
 
 Push inicial bloqueado pelo GitHub Secret Scanning — encontrou 3 `client_secret` Azure em `workflow_fase1_ocr.json`:
-- `REDACTED_GRAPH_SECRET` (Graph)
-- `REDACTED_BC_PROD_SECRET` (BC PROD)
-- `REDACTED_BC_DEV_SECRET` (BC DEV)
+- `[REDACTED]` (Graph)
+- `[REDACTED]` (BC PROD)
+- `[REDACTED]` (BC DEV)
 
 Também 3 secrets em `.md` (planeamento, ESTADO-ATUAL, relatorio_2026-06-29).
 
